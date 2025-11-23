@@ -30,10 +30,6 @@ function LandingPage({ onLaunch, onHome, isDarkMode, setIsDarkMode }) {
   );
 }
 
-// HomeButton moved to `src/components/HomeButton.jsx`
-
-// ModeToggle moved to `src/components/ModeToggle.jsx`
-
 // Dark Mode Design (current red and black sun design)
 function DarkModeDesign({ onLaunch }) {
   return (
@@ -156,9 +152,6 @@ function LightModeDesign({ onLaunch }) {
       className="flex-1 flex items-center justify-center relative z-10"
       style={{ overflow: "visible" }}
     >
-      <div className="absolute inset-0 flex items-center justify-center">
-        <div className="vichy-bg" style={{ height: "100vh" }}></div>
-      </div>
     </div>
   {/* Launch button at bottom */}
       <div className="relative z-30 pb-8 md:pb-12 flex justify-center mt-6 md:mt-10">

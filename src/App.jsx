@@ -3,6 +3,7 @@ import LandingPage from "./LandingPage";
 import HomeButton from "./components/HomeButton";
 import ModeToggle from "./components/ModeToggle";
 import titleLogo from "../public/title2.svg";
+import titleLogoCute from "../public/title3.svg";
 import { processTextMessage } from "./api/openjusticeApi";
 
 function App() {
@@ -143,16 +144,17 @@ function App() {
   };
 
   return (
-    <div className="relative min-h-screen bg-[#ff4201] flex flex-col">
+    <div className={`relative min-h-screen flex flex-col ${isDarkMode ? 'bg-[#ff4201]' : 'vichy-bg'}`}>
+      <div className="pt-4 w-full max-w-6xl mx-auto px-4">
       {/* Home button and Toggle switch in top left */}
       <div className="absolute top-6 left-6 z-40 flex gap-3 items-center">
         <HomeButton onHome={handleGoHome} isDarkMode={isDarkMode} />
         <ModeToggle isDarkMode={isDarkMode} setIsDarkMode={setIsDarkMode} />
       </div>
 
-      <div className="w-full max-w-6xl mx-auto px-4">
+      
         <h1 className="text-center mb-8 text-5xl md:text-6xl font-black text-black tracking-tight drop-shadow-lg">
-          hackab
+          <img src={isDarkMode ? titleLogo : titleLogoCute} alt="title2" className="w-56 md:w-72 mx-auto select-none" draggable={false} />
         </h1>
         <p className="text-center text-black/80 mb-12 text-lg md:text-xl font-medium">
           Enter your message
