@@ -32,6 +32,32 @@ function App() {
     setIsLoading(false);
   };
 
+  const panelBase = "border-4 rounded-xl p-6";
+  const panelDark = "bg-black/20 border-black/30 backdrop-blur-sm";
+  const panelLight = "bg-white/60 border-white/20 backdrop-blur-md shadow-sm";
+
+  const chatBase = "w-full md:w-1/2 flex flex-col border-4 rounded-xl overflow-hidden";
+  const chatPanelClasses = `${chatBase} ${isDarkMode ? panelDark : panelLight}`;
+  const uploadPanelClasses = `w-full md:w-1/2 flex flex-col ${panelBase} ${isDarkMode ? panelDark : panelLight}`;
+
+  const dashedBorderClass = isDarkMode ? "border-dashed border-black/30" : "border-dashed border-white/30";
+
+  const userBubble = isDarkMode
+    ? "max-w-[80%] rounded-lg p-3 bg-black/40 text-white"
+    : "max-w-[80%] rounded-lg p-3 bg-white/90 text-black shadow-sm border border-white/10";
+
+  const assistantBubble = isDarkMode
+    ? "max-w-[80%] rounded-lg p-3 bg-black/30 text-black"
+    : "max-w-[80%] rounded-lg p-3 bg-white/80 text-black shadow-sm border border-white/10";
+
+  const textareaClass = isDarkMode
+    ? "flex-1 p-3 border-4 border-black/30 rounded-lg bg-black/20 backdrop-blur-sm text-black font-inherit text-sm resize-none transition-all duration-300 focus:outline-none focus:border-black/50 focus:bg-black/30 placeholder:text-black/50"
+    : "flex-1 p-3 border-4 border-white/20 rounded-lg bg-white/50 backdrop-blur-md text-black font-inherit text-sm resize-none transition-all duration-300 focus:outline-none focus:border-white/30 focus:bg-white/70 placeholder:text-black/50";
+
+  const sendButtonClass = isDarkMode
+    ? "px-6 py-3 font-bold text-white bg-black border-4 border-white rounded-lg cursor-pointer transition-all duration-300 hover:scale-105 hover:bg-gray-900 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
+    : "px-6 py-3 font-bold text-black bg-white border-4 border-white/30 rounded-lg cursor-pointer transition-all duration-300 hover:scale-105 hover:bg-white/90 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100";
+
   if (!hasLaunched) {
     return (
       <LandingPage
@@ -156,14 +182,22 @@ function App() {
         <h1 className="text-center mb-8 text-5xl md:text-6xl font-black text-black tracking-tight drop-shadow-lg">
           <img src={isDarkMode ? titleLogo : titleLogoCute} alt="title2" className="w-56 md:w-72 mx-auto select-none" draggable={false} />
         </h1>
-        <p className="text-center text-black/80 mb-12 text-lg md:text-xl font-medium">
-          Enter your message
-        </p>
+        {isDarkMode ? (
+          <p className="text-center text-black/80 mb-12 text-lg md:text-xl font-medium">
+            Enter your message
+          </p>
+        ) : (
+          <p className="text-center mb-12 text-lg md:text-xl font-bold">
+            <span className="inline-block bg-white/70 backdrop-blur-md px-4 py-2 rounded-full shadow-sm text-black/90 transform transition-all hover:scale-105">
+              ✦ Enter your message ✦
+            </span>
+          </p>
+        )}
 
         {/* Two Column Layout */}
         <div className="flex flex-col md:flex-row gap-6">
           {/* Left Side: File Upload */}
-          <div className="w-full md:w-1/2 flex flex-col border-4 border-black/30 rounded-xl bg-black/20 backdrop-blur-sm p-6">
+          <div className={uploadPanelClasses}>
             <label
               htmlFor="image-upload"
               className="font-bold text-base text-black mb-3"
@@ -179,7 +213,7 @@ function App() {
             />
             <label
               htmlFor="image-upload"
-              className="flex flex-col items-center justify-center border-4 border-dashed border-black/30 rounded-lg p-8 cursor-pointer hover:border-black/50 transition-colors min-h-[200px]"
+              className={`flex flex-col items-center justify-center border-4 ${dashedBorderClass} rounded-lg p-8 cursor-pointer hover:border-black/50 transition-colors min-h-[200px]`}
             >
               {imagePreview ? (
                 <div className="relative w-full">
@@ -214,7 +248,7 @@ function App() {
 
           {/* Right Side: Chat Interface */}
           <div
-            className="w-full md:w-1/2 flex flex-col border-4 border-black/30 rounded-xl bg-black/20 backdrop-blur-sm overflow-hidden"
+            className={chatPanelClasses}
             style={{ height: "calc(100vh - 200px)", maxHeight: "800px" }}
           >
             {/* Chat Messages Area - Fixed height with internal scrolling */}
@@ -232,13 +266,7 @@ function App() {
                         msg.role === "user" ? "justify-end" : "justify-start"
                       }`}
                     >
-                      <div
-                        className={`max-w-[80%] rounded-lg p-3 ${
-                          msg.role === "user"
-                            ? "bg-black/40 text-white"
-                            : "bg-black/30 text-black"
-                        }`}
-                      >
+                      <div className={msg.role === "user" ? userBubble : assistantBubble}>
                         {msg.image && (
                           <img
                             src={msg.image}
@@ -257,7 +285,7 @@ function App() {
               )}
               {isLoading && messages.length > 0 && (
                 <div className="flex justify-start">
-                  <div className="bg-black/30 text-black rounded-lg p-3">
+                  <div className={isDarkMode ? "bg-black/30 text-black rounded-lg p-3" : "bg-white/80 text-black rounded-lg p-3 shadow-sm border border-white/10"}>
                     <div className="flex gap-1">
                       <span className="animate-bounce">.</span>
                       <span
@@ -297,7 +325,7 @@ function App() {
                   value={message}
                   onChange={(e) => setMessage(e.target.value)}
                   placeholder="Type your message..."
-                  className="flex-1 p-3 border-4 border-black/30 rounded-lg bg-black/20 backdrop-blur-sm text-black font-inherit text-sm resize-none transition-all duration-300 focus:outline-none focus:border-black/50 focus:bg-black/30 placeholder:text-black/50"
+                  className={textareaClass}
                   rows="2"
                   onKeyDown={(e) => {
                     if (e.key === "Enter" && !e.shiftKey) {
@@ -308,7 +336,7 @@ function App() {
                 />
                 <button
                   type="submit"
-                  className="px-6 py-3 font-bold text-white bg-black border-4 border-white rounded-lg cursor-pointer transition-all duration-300 hover:scale-105 hover:bg-gray-900 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
+                  className={sendButtonClass}
                   disabled={!message.trim() || isLoading}
                 >
                   {isLoading ? "..." : "Send"}
