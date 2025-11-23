@@ -16,6 +16,7 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
   const [pendingExecutionId, setPendingExecutionId] = useState(null); // Track execution ID for resuming
+  const [currentStatus, setCurrentStatus] = useState(null); // Track current processing status
   const messagesEndRef = useRef(null);
 
   // Auto-scroll to bottom when messages change
@@ -38,11 +39,16 @@ function App() {
   const panelDark = "bg-black/20 border-black/30 backdrop-blur-sm";
   const panelLight = "bg-white/60 border-white/20 backdrop-blur-md shadow-sm";
 
-  const chatBase = "w-full md:w-1/2 flex flex-col border-4 rounded-xl overflow-hidden";
+  const chatBase =
+    "w-full md:w-1/2 flex flex-col border-4 rounded-xl overflow-hidden";
   const chatPanelClasses = `${chatBase} ${isDarkMode ? panelDark : panelLight}`;
-  const uploadPanelClasses = `w-full md:w-1/2 flex flex-col ${panelBase} ${isDarkMode ? panelDark : panelLight}`;
+  const uploadPanelClasses = `w-full md:w-1/2 flex flex-col ${panelBase} ${
+    isDarkMode ? panelDark : panelLight
+  }`;
 
-  const dashedBorderClass = isDarkMode ? "border-dashed border-black/30" : "border-dashed border-white/30";
+  const dashedBorderClass = isDarkMode
+    ? "border-dashed border-black/30"
+    : "border-dashed border-white/30";
 
   const userBubble = isDarkMode
     ? "max-w-[80%] rounded-lg p-3 bg-black/40 text-white"
@@ -94,6 +100,94 @@ function App() {
     }
   };
 
+  const handleDownloadPDF = async () => {
+    try {
+      // Find the last assistant message (the final response)
+      const lastAssistantMessage = [...messages]
+        .reverse()
+        .find((msg) => msg.role === "assistant" && msg.content);
+
+      if (!lastAssistantMessage || !lastAssistantMessage.content) {
+        setError("No message content available to download");
+        return;
+      }
+
+      setIsLoading(true);
+      setError(null);
+
+      // Prepare data for PDF generation
+      const pdfData = {
+        imageData: imagePreview || null, // Base64 image data (optional)
+        message: lastAssistantMessage.content,
+        fileName: `hackab-document-${
+          new Date().toISOString().split("T")[0]
+        }.pdf`,
+      };
+
+      // Call server endpoint to generate and sign PDF
+      const serverUrl = import.meta.env.VITE_PDF_SERVER_URL || "http://localhost:3000";
+      const response = await fetch(`${serverUrl}/api/generate-pdf`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(pdfData),
+      }).catch((fetchError) => {
+        // Handle network errors (server not running, CORS, etc.)
+        if (fetchError.name === "TypeError" && fetchError.message.includes("fetch")) {
+          throw new Error(
+            "Cannot connect to PDF server. Please make sure the server is running on port 3000. Run 'npm run server' in a separate terminal."
+          );
+        }
+        throw fetchError;
+      });
+
+      if (!response.ok) {
+        let errorMessage = `Server error: ${response.status} ${response.statusText}`;
+        try {
+          const errorData = await response.json();
+          errorMessage = errorData.error || errorData.details || errorMessage;
+        } catch (e) {
+          // If response is not JSON, try to get text
+          try {
+            const errorText = await response.text();
+            if (errorText) errorMessage = errorText;
+          } catch (e2) {
+            // Ignore
+          }
+        }
+        throw new Error(errorMessage);
+      }
+
+      // Get PDF blob
+      const blob = await response.blob();
+
+      // Verify we got a PDF
+      if (blob.type !== "application/pdf" && blob.size === 0) {
+        throw new Error("Server did not return a valid PDF file");
+      }
+
+      // Create download link
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = pdfData.fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+
+      setIsLoading(false);
+    } catch (err) {
+      console.error("Error generating PDF:", err);
+      setError(
+        err.message ||
+          "Failed to generate PDF. Make sure the server is running on port 3000. Run 'npm run server' in a separate terminal."
+      );
+      setIsLoading(false);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!message.trim()) return;
@@ -117,6 +211,7 @@ function App() {
 
     setIsLoading(true);
     setError(null);
+    setCurrentStatus(null); // Clear any previous status
 
     // Add placeholder for AI response
     setMessages((prev) => [
@@ -141,6 +236,12 @@ function App() {
         userMessage,
         currentImage,
         (updatedResponse) => {
+          // updatedResponse is now an object with { content, status }
+          const { content, status } = updatedResponse;
+
+          // Update status indicator
+          setCurrentStatus(status);
+
           // Update the last AI message as it streams
           setMessages((prev) => {
             const newMessages = [...prev];
@@ -149,7 +250,7 @@ function App() {
               if (newMessages[i].role === "assistant") {
                 newMessages[i] = {
                   role: "assistant",
-                  content: updatedResponse,
+                  content: content || "",
                   isLoading: false,
                 };
                 break;
@@ -165,6 +266,8 @@ function App() {
       if (response.executionId && response.awaitingInput) {
         setPendingExecutionId(response.executionId);
         console.log("Stored execution ID for resuming:", response.executionId);
+        // The content should already be in the last assistant message
+        // Make sure it's visible by ensuring the message is updated
       } else if (response.executionId) {
         // If we got an executionId but not awaiting input, clear any pending one
         // (execution completed)
@@ -191,21 +294,30 @@ function App() {
       });
     } finally {
       setIsLoading(false);
+      setCurrentStatus(null); // Clear status when done
     }
   };
 
   return (
-    <div className={`relative min-h-screen flex flex-col ${isDarkMode ? 'bg-[#ff4201]' : 'vichy-bg'}`}>
+    <div
+      className={`relative min-h-screen flex flex-col ${
+        isDarkMode ? "bg-[#ff4201]" : "vichy-bg"
+      }`}
+    >
       <div className="pt-4 w-full max-w-6xl mx-auto px-4">
-      {/* Home button and Toggle switch in top left */}
-      <div className="absolute top-6 left-6 z-40 flex gap-3 items-center">
-        <HomeButton onHome={handleGoHome} isDarkMode={isDarkMode} />
-        <ModeToggle isDarkMode={isDarkMode} setIsDarkMode={setIsDarkMode} />
-      </div>
+        {/* Home button and Toggle switch in top left */}
+        <div className="absolute top-6 left-6 z-40 flex gap-3 items-center">
+          <HomeButton onHome={handleGoHome} isDarkMode={isDarkMode} />
+          <ModeToggle isDarkMode={isDarkMode} setIsDarkMode={setIsDarkMode} />
+        </div>
 
-      
         <h1 className="text-center mb-8 text-5xl md:text-6xl font-black text-black tracking-tight drop-shadow-lg">
-          <img src={isDarkMode ? titleLogo : titleLogoCute} alt="title2" className="w-56 md:w-72 mx-auto select-none" draggable={false} />
+          <img
+            src={isDarkMode ? titleLogo : titleLogoCute}
+            alt="title2"
+            className="w-56 md:w-72 mx-auto select-none"
+            draggable={false}
+          />
         </h1>
         {isDarkMode ? (
           <p className="text-center text-black/80 mb-12 text-lg md:text-xl font-medium">
@@ -279,8 +391,57 @@ function App() {
             {/* Chat Messages Area - Fixed height with internal scrolling */}
             <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0">
               {messages.length === 0 ? (
-                <div className="flex items-center justify-center h-full text-black/60">
-                  <p>Start a conversation...</p>
+                <div className="flex items-center justify-center h-full">
+                  <div
+                    className={`max-w-md p-6 rounded-lg ${
+                      isDarkMode
+                        ? "bg-black/30 text-black/90 border-2 border-black/20"
+                        : "bg-white/70 text-black/90 border-2 border-white/30 shadow-sm"
+                    }`}
+                  >
+                    <p className="font-bold text-lg mb-4 text-center">
+                      Start a conversation...
+                    </p>
+                    <div className="text-sm space-y-2">
+                      <p className="font-semibold mb-2">
+                        When describing your situation, please include:
+                      </p>
+                      <ul className="list-disc list-inside space-y-1 text-xs">
+                        <li>
+                          <strong>People in the photo:</strong> Who is involved,
+                          their roles, and any identifying features
+                        </li>
+                        <li>
+                          <strong>Location:</strong> Where the event took place
+                          (address, building, area, etc.)
+                        </li>
+                        <li>
+                          <strong>Behavior:</strong> What actions or behaviors
+                          are occurring
+                        </li>
+                        <li>
+                          <strong>Harming event:</strong> What specific harmful
+                          incident or event happened
+                        </li>
+                        <li>
+                          <strong>Effect of the event:</strong> What impact or
+                          consequences resulted
+                        </li>
+                        <li>
+                          <strong>Time context:</strong> When this occurred
+                          (date, time, duration)
+                        </li>
+                        <li>
+                          <strong>General surroundings:</strong> The
+                          environment, setting, and context of the situation
+                        </li>
+                      </ul>
+                      <p className="text-xs mt-3 italic text-center">
+                        Be as detailed as possible to help us understand your
+                        situation.
+                      </p>
+                    </div>
+                  </div>
                 </div>
               ) : (
                 <>
@@ -291,7 +452,11 @@ function App() {
                         msg.role === "user" ? "justify-end" : "justify-start"
                       }`}
                     >
-                      <div className={msg.role === "user" ? userBubble : assistantBubble}>
+                      <div
+                        className={
+                          msg.role === "user" ? userBubble : assistantBubble
+                        }
+                      >
                         {msg.image && (
                           <img
                             src={msg.image}
@@ -308,9 +473,34 @@ function App() {
                   <div ref={messagesEndRef} />
                 </>
               )}
-              {isLoading && messages.length > 0 && (
+              {/* Status indicator - shows current processing step */}
+              {currentStatus && (
                 <div className="flex justify-start">
-                  <div className={isDarkMode ? "bg-black/30 text-black rounded-lg p-3" : "bg-white/80 text-black rounded-lg p-3 shadow-sm border border-white/10"}>
+                  <div className="text-sm font-medium italic">
+                    <span
+                      className="text-[#8B0000] dark:text-[#8B0000]"
+                      style={{
+                        textShadow:
+                          "0 0 8px rgba(139, 0, 0, 0.8), 0 0 12px rgba(139, 0, 0, 0.6), 0 0 16px rgba(139, 0, 0, 0.4)",
+                        animation: "pulse 2s ease-in-out infinite",
+                      }}
+                    >
+                      {currentStatus.type}: {currentStatus.title}
+                      {currentStatus.status && ` (${currentStatus.status})`}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {isLoading && messages.length > 0 && !currentStatus && (
+                <div className="flex justify-start">
+                  <div
+                    className={
+                      isDarkMode
+                        ? "bg-black/30 text-black rounded-lg p-3"
+                        : "bg-white/80 text-black rounded-lg p-3 shadow-sm border border-white/10"
+                    }
+                  >
                     <div className="flex gap-1">
                       <span className="animate-bounce">.</span>
                       <span
@@ -338,8 +528,8 @@ function App() {
                   ⏳ Waiting for your response...
                 </p>
                 <p className="text-blue-700 text-xs">
-                  The API needs more information. Type your reply below to
-                  continue.
+                  Please provide the requested information above. Type your
+                  reply below to continue.
                 </p>
               </div>
             )}
@@ -351,6 +541,27 @@ function App() {
                 <p className="text-red-700 text-sm">{error}</p>
               </div>
             )}
+
+            {/* Download PDF button - show when there's a final assistant message */}
+            {messages.some(
+              (msg) => msg.role === "assistant" && msg.content && !msg.isLoading
+            ) &&
+              !isLoading &&
+              !pendingExecutionId && (
+                <div className="mx-4 mb-2 flex justify-center">
+                  <button
+                    onClick={handleDownloadPDF}
+                    disabled={isLoading}
+                    className={`px-6 py-3 font-bold rounded-lg cursor-pointer transition-all duration-300 hover:scale-105 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed ${
+                      isDarkMode
+                        ? "bg-red-600 text-white border-2 border-red-700 hover:bg-red-700"
+                        : "bg-red-500 text-white border-2 border-red-600 hover:bg-red-600 shadow-sm"
+                    }`}
+                  >
+                    📄 Download Signed PDF
+                  </button>
+                </div>
+              )}
 
             {/* Input Area */}
             <form

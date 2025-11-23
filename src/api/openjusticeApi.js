@@ -126,11 +126,46 @@ async function sendMessage(
 }
 
 /**
+ * Parse status line from format: ━━━━━━ TYPE: Title (Status) ━━━━━━
+ * Returns { type, title, status } or null if not a status line
+ */
+function parseStatusLine(text) {
+  const statusLineRegex = /━━━━━━\s+(.+?)\s+━━━━━━/;
+  const match = text.match(statusLineRegex);
+  if (!match) return null;
+
+  const content = match[1];
+  // Parse format like "SWITCH: Switch (Deciding)" or "OUTCOME: Legal reasoning (Finished)"
+  const parts = content.split(":");
+  if (parts.length < 2) return null;
+
+  const type = parts[0].trim();
+  const rest = parts.slice(1).join(":").trim();
+
+  // Extract title and status from "(Status)" if present
+  const statusMatch = rest.match(/^(.+?)\s*\((.+?)\)$/);
+  if (statusMatch) {
+    return {
+      type,
+      
+      title: statusMatch[1].trim(),
+      status: statusMatch[2].trim(),
+    };
+  }
+
+  return {
+    type,
+    title: rest,
+    status: null,
+  };
+}
+
+/**
  * Process Server-Sent Events from the stream
  * Based on the example implementation
  * @param {string} eventText - The raw SSE event text
  * @param {Object} fullResponse - The response object being built
- * @param {Function} onUpdate - Callback to update the response
+ * @param {Function} onUpdate - Callback to update the response (receives { content, status })
  */
 function processEvent(eventText, fullResponse, onUpdate) {
   const lines = eventText.split("\n").filter((line) => line.trim());
@@ -162,44 +197,166 @@ function processEvent(eventText, fullResponse, onUpdate) {
     switch (eventType) {
       case "message":
         if (parsed.text) {
-          fullResponse.outputText += parsed.text;
-          onUpdate(fullResponse.outputText);
+          const text = parsed.text;
+
+          // Check each line for status indicators
+          const lines = text.split("\n");
+          let hasStatusLine = false;
+          let contentToAdd = "";
+
+          for (const line of lines) {
+            const statusInfo = parseStatusLine(line);
+            if (statusInfo) {
+              hasStatusLine = true;
+              // Update status indicator
+              fullResponse.currentStatus = statusInfo;
+
+              // If this is an OUTCOME with status "Finished", start accumulating content
+              if (
+                statusInfo.type === "OUTCOME" &&
+                statusInfo.status === "Finished"
+              ) {
+                fullResponse.shouldAccumulate = true;
+                fullResponse.currentStatus = null; // Clear status when we start showing content
+              } else {
+                // For other status lines, just update the status indicator
+                fullResponse.shouldAccumulate = false;
+              }
+            } else {
+              // Not a status line - accumulate if we should
+              if (fullResponse.shouldAccumulate) {
+                contentToAdd += line + "\n";
+              }
+            }
+          }
+
+          // If we found a status line, update status
+          if (hasStatusLine) {
+            onUpdate({
+              content: fullResponse.outputText,
+              status: fullResponse.currentStatus,
+            });
+          }
+
+          // If we should accumulate content, add it
+          if (fullResponse.shouldAccumulate && contentToAdd) {
+            fullResponse.outputText += contentToAdd;
+            onUpdate({
+              content: fullResponse.outputText,
+              status: null, // Clear status when showing content
+            });
+          } else if (!hasStatusLine && fullResponse.shouldAccumulate) {
+            // If we're accumulating but no status line, add all text
+            fullResponse.outputText += text;
+            onUpdate({
+              content: fullResponse.outputText,
+              status: null,
+            });
+          } else if (!hasStatusLine && fullResponse.awaitingInput) {
+            // If we're awaiting input, accumulate all content (even if we haven't seen OUTCOME Finished)
+            // This ensures questions/context from the API are displayed
+            fullResponse.outputText += text;
+            onUpdate({
+              content: fullResponse.outputText,
+              status: null,
+            });
+          } else if (!hasStatusLine) {
+            // No status line and not accumulating - just update with current status
+            onUpdate({
+              content: fullResponse.outputText,
+              status: fullResponse.currentStatus,
+            });
+          }
         }
         break;
 
       case "node-result": {
         const node = parsed;
-        // For running nodes, show just the header
+        // For running nodes, update status
         if (node.status === "running") {
           const description = node.description || "in progress";
-          const nodeInfo = `\n━━━━━━ ${node.nodeType.toUpperCase()}: ${
-            node.title
-          } (${description}) ━━━━━━\n`;
-          fullResponse.outputText += nodeInfo;
-          onUpdate(fullResponse.outputText);
+          fullResponse.currentStatus = {
+            type: node.nodeType?.toUpperCase() || "PROCESSING",
+            title: node.title || "Processing",
+            status: description,
+          };
+          fullResponse.shouldAccumulate = false;
+          onUpdate({
+            content: fullResponse.outputText,
+            status: fullResponse.currentStatus,
+          });
           break;
         }
 
-        // For completed nodes, show the full content with borders
-        if (node.status === "completed" && node.nodeType !== "outcome") {
-          // Show the final output data with borders
-          if (node.data && Object.keys(node.data).length > 0) {
-            const nodeData = `\n${JSON.stringify(node.data, null, 2)}\n\n`;
-            fullResponse.outputText += nodeData;
-            onUpdate(fullResponse.outputText);
-          }
+        // For completed outcome nodes, start accumulating
+        if (node.status === "completed" && node.nodeType === "outcome") {
+          fullResponse.shouldAccumulate = true;
+          fullResponse.currentStatus = null;
+          // Don't add node data to output - wait for actual content
+          onUpdate({
+            content: fullResponse.outputText,
+            status: null,
+          });
+          break;
+        }
+
+        // For other completed nodes, just update status
+        if (node.status === "completed") {
+          fullResponse.shouldAccumulate = false;
+          fullResponse.currentStatus = {
+            type: node.nodeType?.toUpperCase() || "COMPLETED",
+            title: node.title || "Completed",
+            status: "completed",
+          };
+          onUpdate({
+            content: fullResponse.outputText,
+            status: fullResponse.currentStatus,
+          });
         }
         break;
       }
 
       case "awaiting-user-input": {
         const input = parsed;
-        const inputInfo = `\n\n[Awaiting user input - Execution ID: ${input.executionId}]\n`;
-        fullResponse.outputText += inputInfo;
+        // When awaiting input, we should show all content accumulated so far
+        // This includes any questions or context the API provided
         fullResponse.executionId = input.executionId; // Store execution ID for resuming
         fullResponse.complete = true;
         fullResponse.awaitingInput = true; // Flag to indicate we're waiting for user input
-        onUpdate(fullResponse.outputText);
+        fullResponse.currentStatus = null;
+
+        // When awaiting input, start accumulating all content from now on
+        // This ensures any follow-up messages/questions are captured
+        fullResponse.shouldAccumulate = true;
+
+        // If there's a message/question in the input event itself, add it
+        if (input.message || input.question || input.prompt) {
+          const questionText = input.message || input.question || input.prompt;
+          if (questionText && !fullResponse.outputText.includes(questionText)) {
+            fullResponse.outputText +=
+              (fullResponse.outputText.trim() ? "\n\n" : "") + questionText;
+          }
+        }
+
+        // Store the question/message for display if available
+        fullResponse.awaitingInputMessage =
+          input.message || input.question || input.prompt || null;
+
+        // When awaiting input, ensure we show all content (even if we haven't seen OUTCOME Finished)
+        // This ensures the user sees what information is needed
+        if (!fullResponse.outputText.trim()) {
+          // If no content was accumulated, try to get it from the last message event
+          // This is a fallback in case content wasn't accumulated properly
+          console.warn(
+            "No content accumulated when awaiting user input. The API question may not be visible."
+          );
+        }
+
+        // Final update with all accumulated content (this should include the question/context)
+        onUpdate({
+          content: fullResponse.outputText,
+          status: null,
+        });
         break;
       }
 
@@ -289,6 +446,8 @@ async function startStream(
       outputText: "",
       complete: false,
       awaitingInput: false,
+      currentStatus: null, // Current processing status (e.g., "Thinking", "Gathering facts")
+      shouldAccumulate: false, // Whether to accumulate content (only after OUTCOME Finished)
     };
 
     const reader = response.body.getReader();
