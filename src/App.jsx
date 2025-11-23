@@ -125,7 +125,8 @@ function App() {
       };
 
       // Call server endpoint to generate and sign PDF
-      const serverUrl = import.meta.env.VITE_PDF_SERVER_URL || "http://localhost:3000";
+      const serverUrl =
+        import.meta.env.VITE_PDF_SERVER_URL || "http://localhost:3000";
       const response = await fetch(`${serverUrl}/api/generate-pdf`, {
         method: "POST",
         headers: {
@@ -134,7 +135,10 @@ function App() {
         body: JSON.stringify(pdfData),
       }).catch((fetchError) => {
         // Handle network errors (server not running, CORS, etc.)
-        if (fetchError.name === "TypeError" && fetchError.message.includes("fetch")) {
+        if (
+          fetchError.name === "TypeError" &&
+          fetchError.message.includes("fetch")
+        ) {
           throw new Error(
             "Cannot connect to PDF server. Please make sure the server is running on port 3000. Run 'npm run server' in a separate terminal."
           );
