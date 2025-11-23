@@ -1,4 +1,7 @@
 import { useState, useEffect, useRef } from "react";
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import { generateConversationPdf } from './generatePdf';
+import { plainAddPlaceholder, SignPdf } from '@signpdf/signpdf';
 import LandingPage from "./LandingPage";
 import HomeButton from "./components/HomeButton";
 import ModeToggle from "./components/ModeToggle";
@@ -7,6 +10,9 @@ import titleLogoCute from "../public/title3.svg";
 import { processTextMessage } from "./api/openjusticeApi";
 
 function App() {
+    // Ref for hidden file input
+    const hiddenFileInputRef = useRef(null);
+
   const [hasLaunched, setHasLaunched] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(true); // Default to dark mode
   const [image, setImage] = useState(null);
@@ -15,7 +21,49 @@ function App() {
   const [messages, setMessages] = useState([]); // Chat messages array
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [uploadedFile, setUploadedFile] = useState(null);
+  // Remove hash state
   const messagesEndRef = useRef(null);
+  // Generate and download a PDF of the conversation in the browser
+  const handleDownloadPDF = async () => {
+    const pdfDoc = await PDFDocument.create();
+    const page = pdfDoc.addPage([612, 792]);
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    let y = 750;
+    page.drawText('Conversation Transcript', {
+      x: 50,
+      y,
+      size: 20,
+      font,
+      color: rgb(0, 0, 0),
+    });
+    y -= 40;
+    messages.forEach((msg, i) => {
+      const text = `${msg.role}: ${msg.content}`;
+      page.drawText(text, {
+        x: 50,
+        y,
+        size: 12,
+        font,
+        color: rgb(0, 0, 0),
+      });
+      y -= 20;
+      if (y < 50) {
+        y = 750;
+        pdfDoc.addPage([612, 792]);
+      }
+    });
+    const pdfBytes = await pdfDoc.save();
+    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'conversation.pdf';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {
@@ -58,16 +106,7 @@ function App() {
     ? "px-6 py-3 font-bold text-white bg-black border-4 border-white rounded-lg cursor-pointer transition-all duration-300 hover:scale-105 hover:bg-gray-900 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
     : "px-6 py-3 font-bold text-black bg-white border-4 border-white/30 rounded-lg cursor-pointer transition-all duration-300 hover:scale-105 hover:bg-white/90 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100";
 
-  if (!hasLaunched) {
-    return (
-      <LandingPage
-        onLaunch={() => setHasLaunched(true)}
-        onHome={handleGoHome}
-        isDarkMode={isDarkMode}
-        setIsDarkMode={setIsDarkMode}
-      />
-    );
-  }
+  // Remove unreachable if (!hasLaunched) block
 
   const handleImageChange = (e) => {
     const file = e.target.files[0];
@@ -85,269 +124,175 @@ function App() {
   const handleRemoveImage = () => {
     setImage(null);
     setImagePreview(null);
-    // Reset file input
-    const fileInput = document.getElementById("image-upload");
-    if (fileInput) {
-      fileInput.value = "";
-    }
   };
 
   const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!message.trim()) return;
+  e.preventDefault();
+  if (!message.trim()) return;
 
-    const userMessage = message.trim();
-    const currentImage = image;
+  setIsLoading(true);
+  setError(null);
 
-    // Add user message to chat
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: "user",
-        content: userMessage,
-        image: currentImage ? imagePreview : null,
-      },
-    ]);
-
-    // Clear input only (keep image for next message)
+  try {
+    // Add the user message to chat
+    const newMessage = { role: "user", content: message };
+    setMessages((prev) => [...prev, newMessage]);
+    
+    // Send to API
+    const response = await processTextMessage(message);
+    setMessages((prev) => [...prev, { role: "assistant", content: response }]);
     setMessage("");
-    // Don't clear image - it stays in the upload area until user replaces it
-
-    setIsLoading(true);
-    setError(null);
-
-    // Add placeholder for AI response
-    setMessages((prev) => [
-      ...prev,
-      {
-        role: "assistant",
-        content: "",
-        isLoading: true,
-      },
-    ]);
-
-    try {
-      await processTextMessage(userMessage, currentImage, (updatedResponse) => {
-        // Update the last AI message as it streams
-        setMessages((prev) => {
-          const newMessages = [...prev];
-          // Find the last assistant message and update it
-          for (let i = newMessages.length - 1; i >= 0; i--) {
-            if (newMessages[i].role === "assistant") {
-              newMessages[i] = {
-                role: "assistant",
-                content: updatedResponse,
-                isLoading: false,
-              };
-              break;
-            }
-          }
-          return newMessages;
-        });
-      });
-    } catch (err) {
-      setError(
-        err.message || "An error occurred while processing your request."
-      );
-      // Update the last AI message with error
-      setMessages((prev) => {
-        const newMessages = [...prev];
-        for (let i = newMessages.length - 1; i >= 0; i--) {
-          if (newMessages[i].role === "assistant") {
-            newMessages[i] = {
-              role: "assistant",
-              content: `Error: ${err.message || "An error occurred"}`,
-              isLoading: false,
-            };
-            break;
-          }
-        }
-        return newMessages;
-      });
-    } finally {
-      setIsLoading(false);
-    }
+  } catch (err) {
+    setError("Failed to send message");
+  } finally {
+    setIsLoading(false);
+  }
   };
-
-  return (
-    <div className={`relative min-h-screen flex flex-col ${isDarkMode ? 'bg-[#ff4201]' : 'vichy-bg'}`}>
-      <div className="pt-4 w-full max-w-6xl mx-auto px-4">
-      {/* Home button and Toggle switch in top left */}
-      <div className="absolute top-6 left-6 z-40 flex gap-3 items-center">
-        <HomeButton onHome={handleGoHome} isDarkMode={isDarkMode} />
-        <ModeToggle isDarkMode={isDarkMode} setIsDarkMode={setIsDarkMode} />
-      </div>
-
-      
-        <h1 className="text-center mb-8 text-5xl md:text-6xl font-black text-black tracking-tight drop-shadow-lg">
-          <img src={isDarkMode ? titleLogo : titleLogoCute} alt="title2" className="w-56 md:w-72 mx-auto select-none" draggable={false} />
-        </h1>
-        {isDarkMode ? (
-          <p className="text-center text-black/80 mb-12 text-lg md:text-xl font-medium">
-            Enter your message
-          </p>
+    return (
+      <>
+        {!hasLaunched ? (
+          <LandingPage
+            onLaunch={() => setHasLaunched(true)}
+            onHome={handleGoHome}
+            isDarkMode={isDarkMode}
+            setIsDarkMode={setIsDarkMode}
+          />
         ) : (
-          <p className="text-center mb-12 text-lg md:text-xl font-bold">
-            <span className="inline-block bg-white/70 backdrop-blur-md px-4 py-2 rounded-full shadow-sm text-black/90 transform transition-all hover:scale-105">
-              ✦ Enter your message ✦
-            </span>
-          </p>
-        )}
-
-        {/* Two Column Layout */}
-        <div className="flex flex-col md:flex-row gap-6">
-          {/* Left Side: File Upload */}
-          <div className={uploadPanelClasses}>
-            <label
-              htmlFor="image-upload"
-              className="font-bold text-base text-black mb-3"
-            >
-              Upload Image
-            </label>
-            <input
-              id="image-upload"
-              type="file"
-              accept="image/*"
-              onChange={handleImageChange}
-              className="hidden"
-            />
-            <label
-              htmlFor="image-upload"
-              className={`flex flex-col items-center justify-center border-4 ${dashedBorderClass} rounded-lg p-8 cursor-pointer hover:border-black/50 transition-colors min-h-[200px]`}
-            >
-              {imagePreview ? (
-                <div className="relative w-full">
-                  <img
-                    src={imagePreview}
-                    alt="Preview"
-                    className="max-w-full max-h-64 mx-auto rounded-lg object-contain"
-                  />
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      handleRemoveImage();
-                    }}
-                    className="absolute top-2 right-2 bg-red-500 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold hover:bg-red-600 transition-colors"
-                    aria-label="Remove image"
-                  >
-                    ×
-                  </button>
+          <>
+            <div className={`relative min-h-screen flex flex-col ${isDarkMode ? 'bg-[#ff4201]' : 'vichy-bg'}`}>
+              <div className="pt-4 w-full max-w-6xl mx-auto px-4">
+                {/* Home button and Toggle switch in top left */}
+                <div className="absolute top-6 left-6 z-40 flex gap-3 items-center">
+                  <HomeButton onHome={handleGoHome} isDarkMode={isDarkMode} />
+                  <ModeToggle isDarkMode={isDarkMode} setIsDarkMode={setIsDarkMode} />
                 </div>
-              ) : (
-                <div className="text-center text-black/60">
-                  <p className="text-lg font-medium mb-2">
-                    Click to upload an image
+                <h1 className="text-center mb-8 text-5xl md:text-6xl font-black text-black tracking-tight drop-shadow-lg">
+                  <img src={isDarkMode ? titleLogo : titleLogoCute} alt="title2" className="w-56 md:w-72 mx-auto select-none" draggable={false} />
+                </h1>
+                {isDarkMode ? (
+                  <p className="text-center text-black/80 mb-12 text-lg md:text-xl font-medium">
+                    Enter your message
                   </p>
-                  <p className="text-sm">or drag and drop</p>
-                </div>
-              )}
-            </label>
-          </div>
-
-          {/* Right Side: Chat Interface */}
-          <div
-            className={chatPanelClasses}
-            style={{ height: "calc(100vh - 200px)", maxHeight: "800px" }}
-          >
-            {/* Chat Messages Area - Fixed height with internal scrolling */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0">
-              {messages.length === 0 ? (
-                <div className="flex items-center justify-center h-full text-black/60">
-                  <p>Start a conversation...</p>
-                </div>
-              ) : (
-                <>
-                  {messages.map((msg, index) => (
-                    <div
-                      key={index}
-                      className={`flex ${
-                        msg.role === "user" ? "justify-end" : "justify-start"
-                      }`}
+                ) : (
+                  <p className="text-center mb-12 text-lg md:text-xl font-bold">
+                    <span className="inline-block bg-white/70 backdrop-blur-md px-4 py-2 rounded-full shadow-sm text-black/90 transform transition-all hover:scale-105">
+                      ✦ Enter your message ✦
+                    </span>
+                  </p>
+                )}
+                {/* Two Column Layout */}
+                <div className="flex flex-col md:flex-row gap-6">
+                  {/* Left Side: File Upload */}
+                  <div className={uploadPanelClasses}>
+                    <label htmlFor="image-upload" className="font-bold text-base text-black mb-3">Upload Image</label>
+                    <input
+                      id="image-upload"
+                      type="file"
+                      accept="image/*"
+                      onChange={handleImageChange}
+                      className="hidden"
+                    />
+                    <label
+                      htmlFor="image-upload"
+                      className={`flex flex-col items-center justify-center border-4 ${dashedBorderClass} rounded-lg p-8 cursor-pointer hover:border-black/50 transition-colors min-h-[200px]`}
                     >
-                      <div className={msg.role === "user" ? userBubble : assistantBubble}>
-                        {msg.image && (
-                          <img
-                            src={msg.image}
-                            alt="User uploaded"
-                            className="max-w-full max-h-48 rounded mb-2 object-contain"
-                          />
-                        )}
-                        <div className="whitespace-pre-wrap font-mono text-sm">
-                          {msg.content || (msg.isLoading ? "..." : "")}
+                      {imagePreview ? (
+                        <div className="relative w-full">
+                          <img src={imagePreview} alt="Preview" className="max-w-full max-h-64 mx-auto rounded-lg object-contain" />
+                          <button
+                            type="button"
+                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleRemoveImage(); }}
+                            className="absolute top-2 right-2 bg-red-500 text-white rounded-full w-8 h-8 flex items-center justify-center font-bold hover:bg-red-600 transition-colors"
+                            aria-label="Remove image"
+                          >×</button>
                         </div>
+                      ) : (
+                        <div className="text-center text-black/60">
+                          <p className="text-lg font-medium mb-2">Click to upload an image</p>
+                          <p className="text-sm">or drag and drop</p>
+                        </div>
+                      )}
+                    </label>
+                  </div>
+                  {/* Right Side: Chat Interface */}
+                  <div className={chatPanelClasses}>
+                    <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0">
+                      {messages.length === 0 ? (
+                        <div className="flex items-center justify-center h-full text-black/60">
+                          <p>Start a conversation...</p>
+                        </div>
+                      ) : (
+                        messages.map((msg, index) => (
+                          <div key={index} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+                            <div className={msg.role === "user" ? userBubble : assistantBubble}>
+                              {msg.image && (
+                                <img src={msg.image} alt="User uploaded" className="max-w-full max-h-48 rounded mb-2 object-contain" />
+                              )}
+                              <div className="whitespace-pre-wrap font-mono text-sm">{msg.content || (msg.isLoading ? "..." : "")}</div>
+                            </div>
+                          </div>
+                        ))
+                      )}
+                      <div ref={messagesEndRef} />
+                    </div>
+                    {error && (
+                      <div className="mx-4 mb-2 p-3 bg-red-500/20 border-2 border-red-500 rounded-lg">
+                        <p className="text-red-800 font-bold text-sm">Error:</p>
+                        <p className="text-red-700 text-sm">{error}</p>
                       </div>
-                    </div>
-                  ))}
-                  <div ref={messagesEndRef} />
-                </>
-              )}
-              {isLoading && messages.length > 0 && (
-                <div className="flex justify-start">
-                  <div className={isDarkMode ? "bg-black/30 text-black rounded-lg p-3" : "bg-white/80 text-black rounded-lg p-3 shadow-sm border border-white/10"}>
-                    <div className="flex gap-1">
-                      <span className="animate-bounce">.</span>
-                      <span
-                        className="animate-bounce"
-                        style={{ animationDelay: "0.1s" }}
-                      >
-                        .
-                      </span>
-                      <span
-                        className="animate-bounce"
-                        style={{ animationDelay: "0.2s" }}
-                      >
-                        .
-                      </span>
-                    </div>
+                    )}
+                    <form onSubmit={handleSubmit} className="p-4 border-t-4 border-black/30">
+                      <div className="flex gap-2">
+                        <textarea
+                          id="message"
+                          value={message}
+                          onChange={(e) => setMessage(e.target.value)}
+                          placeholder="Type your message..."
+                          className={textareaClass}
+                          rows="2"
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && !e.shiftKey) {
+                              e.preventDefault();
+                              handleSubmit(e);
+                            }
+                          }}
+                        />
+                        <button type="submit" className={sendButtonClass} disabled={!message.trim() || isLoading}>
+                          {isLoading ? "..." : "Send"}
+                        </button>
+                      </div>
+                    </form>
                   </div>
                 </div>
-              )}
-            </div>
-
-            {/* Error display */}
-            {error && (
-              <div className="mx-4 mb-2 p-3 bg-red-500/20 border-2 border-red-500 rounded-lg">
-                <p className="text-red-800 font-bold text-sm">Error:</p>
-                <p className="text-red-700 text-sm">{error}</p>
               </div>
-            )}
-
-            {/* Input Area */}
-            <form
-              onSubmit={handleSubmit}
-              className="p-4 border-t-4 border-black/30"
-            >
-              <div className="flex gap-2">
-                <textarea
-                  id="message"
-                  value={message}
-                  onChange={(e) => setMessage(e.target.value)}
-                  placeholder="Type your message..."
-                  className={textareaClass}
-                  rows="2"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      handleSubmit(e);
+            </div>
+            {/* Download Button at the Bottom */}
+            <div className="fixed bottom-0 left-0 w-full flex justify-center items-end pb-6 z-50">
+              <div className="flex flex-col items-center min-w-[300px]">
+                <input
+                  type="file"
+                  ref={hiddenFileInputRef}
+                  style={{ display: 'none' }}
+                  onChange={async (e) => {
+                    const file = e.target.files[0];
+                    await handleFileUpload(e);
+                    if (file && fileHash && fileHash !== 'Error hashing file') {
+                      handleDownloadHash(file.name);
                     }
                   }}
                 />
                 <button
-                  type="submit"
-                  className={sendButtonClass}
-                  disabled={!message.trim() || isLoading}
+                  className="bg-black text-white font-bold py-2 px-6 rounded-lg border-2 border-black hover:bg-gray-800 transition-colors"
+                  onClick={handleDownloadPDF}
                 >
-                  {isLoading ? "..." : "Send"}
+                  Secure Download
                 </button>
               </div>
-            </form>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+            </div>
+          </>
+        )}
+      </>
+    );
 }
 
 // HomeButton moved to `src/components/HomeButton.jsx`
